@@ -5,6 +5,7 @@ import torch_geometric
 import torch_geometric.transforms as T
 from sklearn.metrics import roc_auc_score
 from torch_geometric.data import Data
+from torch_geometric.loader import GraphSAINTRandomWalkSampler, NeighborSampler
 from torch_geometric.nn import GCNConv
 
 print('torch', torch.__version__)
@@ -70,7 +71,7 @@ def load_genre_node(datapath) -> Data:
     num_users = len(user_mapping)
 
     movie_mapping = {
-        movie_id: idx + num_users
+        movie_id: idx + num_users 
         for idx, movie_id in enumerate(movies.index)
     }
     num_movies = len(movie_mapping)
@@ -97,7 +98,7 @@ def load_genre_node(datapath) -> Data:
     edge_index = torch.tensor([merge_src, merge_dst])
     edge_label = torch.cat((
         torch.tensor(ratings['rating'].values.reshape(-1, 1), dtype=torch.long),
-        torch.zeros(len(genre_src), 1, dtype=torch.long),
+        torch.ones(len(genre_src), 1, dtype=torch.long),
     ))
 
     data = Data(x=x, edge_index=edge_index, edge_label=edge_label)
@@ -108,14 +109,14 @@ class Net(torch.nn.Module):
     def __init__(self, num_nodes):
         super().__init__()
         self.num_nodes = num_nodes
-        
-        out_channels = 16
+
         emb_dim = 16
+        out_channels = 16
 
         self.embed = torch.nn.Embedding(num_embeddings=num_nodes, embedding_dim=emb_dim)
         self.conv1 = GCNConv(emb_dim, 16)
         self.conv2 = GCNConv(16, out_channels)
-        
+
         # Treat this as regression, ie: produce 1 value.
         self.fc1 = torch.nn.Linear(out_channels * 2, 1)
 
@@ -125,7 +126,7 @@ class Net(torch.nn.Module):
         x = self.conv1(x, edge_index).relu()
         return self.conv2(x, edge_index)
 
-    def decode(self, z, edge_label_index): 
+    def decode(self, z, edge_label_index):
         out = torch.cat((z[edge_label_index[0]], z[edge_label_index[1]]), axis=-1)
         return self.fc1(out)
 
@@ -179,20 +180,40 @@ def main():
 
     model = Net(num_nodes=dataset.num_nodes)
     model = model.to(device)
-    train_data = train_data.to(device)
+    # train_data = train_data.to(device)
     optimizer = torch.optim.Adam(params=model.parameters(), lr=learn_rate)
+
+    # train_loader = NeighborSampler(
+    #     train_data.edge_index,
+    #     # node_idx=train_data.nodes,
+    #     sizes=[15, 10, 5],
+    #     batch_size=1024,
+    #     shuffle=True,
+    #     num_workers=12,
+    # )
+    # batch, ids, adj = next(iter(train_loader))
+
+    train_loader = GraphSAINTRandomWalkSampler(
+        train_data,
+        batch_size=10_000,
+        walk_length=10,
+        num_steps=5,
+        # sample_coverage=100,
+        # num_workers=12,
+    )
 
     # best_val_auc = final_test_auc = 0
     print(f'idx\t\tTrain Loss')
     for epoch_idx in range(1, n_epoch + 1):
-        train_loss = train(model, optimizer, train_data)
+        data = next(iter(train_loader)).to(device)
+        train_loss = train(model, optimizer, data)
         # val_loss = test(model, val_data)
         # test_loss = test(model, test_data)
-        
+
         if epoch_idx % 500 == 0:
+            # print(data)
             print(
-                f'{epoch_idx}\t\t' + 
-                '    \t'.join(map('{:.4f}'.format, [train_loss]))
+                f'{epoch_idx}\t\t' + '    \t'.join(map('{:.4f}'.format, [train_loss]))
             )
 
         # if val_auc > best_val_auc:
