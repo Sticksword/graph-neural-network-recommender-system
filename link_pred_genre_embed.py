@@ -50,9 +50,55 @@ def load_data(datapath) -> Data:
 
     src = [user_mapping[index] for index in ratings['userId']]
     dst = [movie_mapping[index] for index in ratings['movieId']]
-    edge_index = torch.tensor([src, dst])
 
+    edge_index = torch.tensor([src, dst])
     edge_label = torch.tensor(ratings['rating'].values.reshape(-1, 1), dtype=torch.long)
+
+    data = Data(x=x, edge_index=edge_index, edge_label=edge_label)
+    return data
+
+
+def load_genre_node(datapath) -> Data:
+    movie_path = f'./{datapath}/movies.csv'
+    rating_path = f'./{datapath}/ratings.csv'
+    movies = pd.read_csv(movie_path).set_index('movieId')
+    ratings = pd.read_csv(rating_path)
+
+    user_mapping = {
+        user_id: index for index, user_id in enumerate(ratings['userId'].unique())
+    }
+    num_users = len(user_mapping)
+
+    movie_mapping = {
+        movie_id: idx + num_users
+        for idx, movie_id in enumerate(movies.index)
+    }
+    num_movies = len(movie_mapping)
+
+    genres = set(g for gs in movies.genres for g in gs.strip().split('|'))
+    num_genres = len(genres)
+    genre_mapping = {g: i for i, g in enumerate(genres)}
+
+    num_nodes = num_users + num_movies + num_genres
+    x = torch.arange(num_nodes).reshape(-1, 1)
+
+    src, dst = [], []
+    for _, u, m in ratings[['userId', 'movieId']].itertuples():
+        src.append(user_mapping[u])
+        dst.append(movie_mapping[m])
+
+    genre_src, genre_dst = [], []
+    for movie, _gs in movies['genres'].items():
+        for genre in _gs.strip().split('|'):
+            genre_src.append(movie_mapping[movie])
+            genre_dst.append(genre_mapping[genre])
+
+    merge_src, merge_dst = src + genre_src, dst + genre_dst
+    edge_index = torch.tensor([merge_src, merge_dst])
+    edge_label = torch.cat((
+        torch.tensor(ratings['rating'].values.reshape(-1, 1), dtype=torch.long),
+        torch.zeros(len(genre_src), 1, dtype=torch.long),
+    ))
 
     data = Data(x=x, edge_index=edge_index, edge_label=edge_label)
     return data
@@ -63,12 +109,11 @@ class Net(torch.nn.Module):
         super().__init__()
         self.num_nodes = num_nodes
         
-        in_channels = 32
         out_channels = 16
         emb_dim = 16
 
         self.embed = torch.nn.Embedding(num_embeddings=num_nodes, embedding_dim=emb_dim)
-        self.conv1 = GCNConv(in_channels, 16)
+        self.conv1 = GCNConv(emb_dim, 16)
         self.conv2 = GCNConv(16, out_channels)
         
         # Treat this as regression, ie: produce 1 value.
@@ -85,7 +130,7 @@ class Net(torch.nn.Module):
         return self.fc1(out)
 
 
-def train(model, optimizer, train_data):
+def train(model, optimizer, train_data) -> float:
     model.train()
 
     optimizer.zero_grad()
@@ -100,19 +145,23 @@ def train(model, optimizer, train_data):
 
 
 @torch.no_grad()
-def test(model, data):
+def test(model, data) -> float:
     model.eval()
     z = model.encode(data.x, data.edge_index)
-    out = model.decode(z, data.edge_label_index).view(-1).sigmoid()
-    return roc_auc_score(data.edge_label.cpu().numpy(), out.cpu().numpy())
+    out = model.decode(z, data.edge_label_index)
+    # auc = roc_auc_score(data.edge_label.cpu().numpy(), out.cpu().numpy())
+    loss = F.mse_loss(out, data.edge_label.type(torch.float))
+    return loss
 
 
 def main():
     datapath = 'ml-latest-small'
     # datapath = 'ml-25m'
 
-    dataset = load_data(datapath)
-    print(dataset)
+    # dataset = load_data(datapath)
+    dataset = load_genre_node(datapath)
+    print(dataset, '\n')
+
     # dataset = T.NormalizeFeatures()(dataset)
     train_data, val_data, test_data = T.RandomLinkSplit(
         # num_val=0.1,
@@ -123,9 +172,9 @@ def main():
 
     ########### params #############
 
-    n_epoch = 20_000
+    n_epoch = 10_000
     learn_rate = 0.0005
-    
+
     ################################
 
     model = Net(num_nodes=dataset.num_nodes)
@@ -134,17 +183,16 @@ def main():
     optimizer = torch.optim.Adam(params=model.parameters(), lr=learn_rate)
 
     # best_val_auc = final_test_auc = 0
-    print(f'idx\tTrain Loss \tValid Loss')
+    print(f'idx\t\tTrain Loss')
     for epoch_idx in range(1, n_epoch + 1):
         train_loss = train(model, optimizer, train_data)
-        val_auc = test(val_data)
-        test_auc = test(test_data)
+        # val_loss = test(model, val_data)
+        # test_loss = test(model, test_data)
         
-        if epoch_idx % 100 == 0:
+        if epoch_idx % 500 == 0:
             print(
-                '{}    \t{:.4f}    \t{:.4f}    \t{:.4f}'.format(
-                epoch_idx, train_loss, val_auc, test_auc
-                )
+                f'{epoch_idx}\t\t' + 
+                '    \t'.join(map('{:.4f}'.format, [train_loss]))
             )
 
         # if val_auc > best_val_auc:
