@@ -110,19 +110,26 @@ def load_genre_node(datapath) -> Data:
 
 
 class Net(nn.Module):
-    def __init__(self, num_nodes, dropout):
+    def __init__(self, num_nodes, hidden_dim, dropout):
         super().__init__()
 
-        emb_dim = 16
+        emb_dim = hidden_dim
         out_channels = 16
 
         self.num_nodes = num_nodes
+        self.hidden_dim = hidden_dim
         self.dropout = dropout
 
         self.embed = nn.Embedding(num_embeddings=num_nodes, embedding_dim=emb_dim)
+
         self.convs = [
-            GCNConv(emb_dim, 16).to(device),
-            GCNConv(16, out_channels).to(device),
+            GCNConv(hidden_dim, hidden_dim).to(device),
+            GCNConv(hidden_dim, out_channels).to(device),
+        ]
+
+        self.norms = [
+            nn.LayerNorm(hidden_dim).to(device),
+            # nn.LayerNorm(hidden_dim).to(device),
         ]
 
         # self.fc1 = nn.Linear(out_channels * 2, 1)
@@ -137,11 +144,13 @@ class Net(nn.Module):
         x = self.embed(x)
         x = x.squeeze()
 
-        for conv in self.convs:
+        for i, conv in enumerate(self.convs):
             x = conv(x, edge_index)
             emb = x
             x = F.relu(x)
             x = F.dropout(x, p=self.dropout, training=self.training)
+            if i < len(self.convs) - 1:
+                x = self.norms[i](x)
         
         return emb
 
@@ -256,12 +265,13 @@ def main():
 
     n_epoch = 20_000
     learn_rate = 0.0005
+    hidden_dim = 16
     dropout = 0.1
     use_loader = False
 
     ################################
 
-    model = Net(num_nodes=dataset.num_nodes, dropout=dropout)
+    model = Net(num_nodes=dataset.num_nodes, hidden_dim=hidden_dim, dropout=dropout)
     model = model.to(device)
     # train_data = train_data.to(device)
     optimizer = torch.optim.Adam(params=model.parameters(), lr=learn_rate)
@@ -286,7 +296,7 @@ def main():
         # num_workers=12,
     )
 
-    best = np.nan
+    best = 1_000
 
     print(f'idx\tTrain_Err\tValid_Err\tTest_Err')
     for epoch_idx in range(1, n_epoch + 1):
@@ -304,12 +314,13 @@ def main():
                 f'{epoch_idx:04d}\t' + '    \t'.join(map('{:.4f}'.format, epoch_eval))
             )
 
+        # Early stopping
         _, val, test = epoch_eval
-        if test - best > 0.2:
+        if epoch_idx > 500 and test/best > 1.5:
             break
         best = min(best, test)
 
-    print(f'Best Test_Err: {best}')
+    print(f'\nBest Test_Err: {best}')
 
 
 if __name__ == '__main__':
