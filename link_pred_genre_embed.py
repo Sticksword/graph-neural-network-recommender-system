@@ -1,3 +1,5 @@
+from typing import List
+
 import pandas as pd
 import numpy as np
 import torch
@@ -135,7 +137,7 @@ class Net(nn.Module):
         # self.fc1 = nn.Linear(out_channels * 2, 1)
         self.linears = nn.Sequential(
             nn.Linear(out_channels * 2, 16),
-            nn.Dropout(0.3),
+            nn.Dropout(self.dropout),
             # Treat this as regression, ie: produce 1 value.
             nn.Linear(16, 1),
         )
@@ -185,7 +187,7 @@ def test(model, data) -> float:
 
 
 @torch.no_grad()
-def evaluate(model, train, val, test) -> float:
+def evaluate(model, train, val, test) -> List[float]:
     model.eval()
     res = []
     for data in (train, val, test):
@@ -263,13 +265,20 @@ def main():
 
     ########### params #############
 
-    n_epoch = 20_000
-    learn_rate = 0.0005
-    hidden_dim = 16
-    dropout = 0.1
-    use_loader = False
+    params = dict(
+        n_epoch = 20_000,
+        learn_rate = 0.0005,
+        hidden_dim = 16,
+        dropout = 0.3,
+
+        use_loader = False,
+        walk_length=10,
+        num_steps=5,
+    )
 
     ################################
+    print('#', params)
+    globals().update(params)
 
     model = Net(num_nodes=dataset.num_nodes, hidden_dim=hidden_dim, dropout=dropout)
     model = model.to(device)
@@ -288,9 +297,9 @@ def main():
 
     train_loader = GraphSAINTRandomWalkSampler(
         train_data,
-        batch_size=1_000,
-        walk_length=10,
-        num_steps=5,
+        batch_size=5_000,
+        walk_length=walk_length,
+        num_steps=num_steps,
         # sample_coverage=100,
         save_dir='.train_load',
         # num_workers=12,
@@ -298,7 +307,7 @@ def main():
 
     best = 1_000
 
-    print(f'idx\tTrain_Err\tValid_Err\tTest_Err')
+    print(f'idx\tTrain_Err\tValid_Err\tTest_Err\tNum_Node')
     for epoch_idx in range(1, n_epoch + 1):
         if use_loader:
             data = next(iter(train_loader)).to(device)
@@ -311,16 +320,18 @@ def main():
         if epoch_idx % 500 == 0:
             # print(data)
             print(
-                f'{epoch_idx:04d}\t' + '    \t'.join(map('{:.4f}'.format, epoch_eval))
+                f'{epoch_idx:04d}\t' + '    \t'.join(map(
+                    '{:.4f}'.format, epoch_eval + [len(data.x)])
+                    )
             )
 
         # Early stopping
         _, val, test = epoch_eval
-        if epoch_idx > 500 and test/best > 1.5:
-            break
+        # if epoch_idx > 500 and test/best > 1.5:
+        #     break
         best = min(best, test)
 
-    print(f'\nBest Test_Err: {best}')
+    print(f'\n# Best Test_Err: {best}')
 
 
 if __name__ == '__main__':
