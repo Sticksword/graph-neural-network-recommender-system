@@ -104,6 +104,7 @@ def load_genre_node(datapath) -> Data:
     ))
 
     data = Data(x=x, edge_index=edge_index, edge_label=edge_label)
+    data.rating_index = torch.arange(len(ratings))
     return data
 
 
@@ -152,12 +153,9 @@ def test(model, data) -> float:
     model.eval()
     data = data.to(device)
     z = model.encode(data.x, data.edge_index)
-    out = model.decode(z, data.edge_label_index)
+    out = model.decode(z, data.edge_index)
     # auc = roc_auc_score(data.edge_label.cpu().numpy(), out.cpu().numpy())
     loss = F.mse_loss(out, data.edge_label.type(torch.float))
-    m = data.edge_label
-    print(m.max(), m.min())
-    # import ipdb; ipdb.set_trace()
     return loss
 
 
@@ -186,13 +184,14 @@ def split(data, test_ratio, val_ratio):
     del data['rating_index']
 
     N = len(rating_index)
+    remain = torch.arange(N, len(data.edge_index[0]))
     shuffle = rating_index[torch.randperm(N)]
     
     test_split = int(test_ratio * N)
     val_split = int((test_ratio + val_ratio)* N)
-    test_idx = shuffle[: test_split]
-    val_idx = shuffle[test_split: val_split]
-    train_idx = shuffle[val_split: ]
+    test_idx = torch.cat((shuffle[: test_split], remain))
+    val_idx = torch.cat((shuffle[test_split: val_split], remain))
+    train_idx = torch.cat((shuffle[val_split: ], remain))
 
     test_data = data.clone()
     test_data.edge_index = data.edge_index[:, test_idx]
@@ -214,7 +213,7 @@ def main():
     # datapath = 'ml-25m'
 
     dataset = load_data(datapath)
-    # dataset = load_genre_node(datapath)
+    dataset = load_genre_node(datapath)
     print(dataset, '\n')
 
     # dataset = T.NormalizeFeatures()(dataset)
@@ -239,7 +238,7 @@ def main():
 
     ########### params #############
 
-    n_epoch = 10_000
+    n_epoch = 7_000
     learn_rate = 0.0005
     use_loader = False
 
@@ -283,9 +282,6 @@ def main():
 
         if epoch_idx % 500 == 0:
             # print(data)
-            # test(model, train_data)
-            # test(model, val_data)
-            # print(train_loss)
             print(
                 f'{epoch_idx:04d}\t' + '    \t'.join(map('{:.4f}'.format, epoch_eval))
             )
