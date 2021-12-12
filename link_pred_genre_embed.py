@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import torch
 import torch.nn.functional as F
 import torch_geometric
@@ -56,6 +57,7 @@ def load_data(datapath) -> Data:
     edge_label = torch.tensor(ratings['rating'].values.reshape(-1, 1), dtype=torch.long)
 
     data = Data(x=x, edge_index=edge_index, edge_label=edge_label)
+    # import ipdb; ipdb.set_trace()
     return data
 
 
@@ -148,19 +150,42 @@ def train(model, optimizer, train_data) -> float:
 @torch.no_grad()
 def test(model, data) -> float:
     model.eval()
+    data = data.to(device)
     z = model.encode(data.x, data.edge_index)
     out = model.decode(z, data.edge_label_index)
     # auc = roc_auc_score(data.edge_label.cpu().numpy(), out.cpu().numpy())
     loss = F.mse_loss(out, data.edge_label.type(torch.float))
+    m = data.edge_label
+    print(m.max(), m.min())
+    # import ipdb; ipdb.set_trace()
     return loss
+
+
+@torch.no_grad()
+def evaluate(model, train, val, test) -> float:
+    model.eval()
+    res = []
+    for data in (train, val, test):
+        data = data.to(device)
+        z = model.encode(data.x, data.edge_index)
+        out = model.decode(z, data.edge_label_index)
+        loss = F.mse_loss(out, data.edge_label.type(torch.float))
+        res.append(loss)
+    return res
+
+
+def edge_stats(data, type_=''):
+    labels = data.edge_label.squeeze().numpy()
+    label, count = np.unique(labels, return_counts=True)
+    print(type_, dict(zip(label, (count/len(labels)).round(3))))
 
 
 def main():
     datapath = 'ml-latest-small'
     # datapath = 'ml-25m'
 
-    # dataset = load_data(datapath)
-    dataset = load_genre_node(datapath)
+    dataset = load_data(datapath)
+    # dataset = load_genre_node(datapath)
     print(dataset, '\n')
 
     # dataset = T.NormalizeFeatures()(dataset)
@@ -171,10 +196,17 @@ def main():
         add_negative_train_samples=False,
     )(dataset)
 
+    edge_stats(dataset, 'dataset')
+    edge_stats(train_data, 'train_data')
+    edge_stats(val_data, 'val_data')
+    edge_stats(test_data, 'test_data')
+    import ipdb; ipdb.set_trace()
+
     ########### params #############
 
-    n_epoch = 10_000
+    n_epoch = 2000
     learn_rate = 0.0005
+    use_loader = False
 
     ################################
 
@@ -195,25 +227,32 @@ def main():
 
     train_loader = GraphSAINTRandomWalkSampler(
         train_data,
-        batch_size=10_000,
+        batch_size=1_000,
         walk_length=10,
         num_steps=5,
         # sample_coverage=100,
+        save_dir='.train_load',
         # num_workers=12,
     )
 
     # best_val_auc = final_test_auc = 0
-    print(f'idx\t\tTrain Loss')
+    print(f'idx\tTrain_Err\tValid_Err\tTest_Err')
     for epoch_idx in range(1, n_epoch + 1):
-        data = next(iter(train_loader)).to(device)
+        if use_loader:
+            data = next(iter(train_loader)).to(device)
+        else:
+            data = train_data.to(device)
+
         train_loss = train(model, optimizer, data)
-        # val_loss = test(model, val_data)
-        # test_loss = test(model, test_data)
+        epoch_eval = evaluate(model, train_data, val_data, test_data)
 
         if epoch_idx % 500 == 0:
             # print(data)
+            # test(model, train_data)
+            # test(model, val_data)
+            # print(train_loss)
             print(
-                f'{epoch_idx}\t\t' + '    \t'.join(map('{:.4f}'.format, [train_loss]))
+                f'{epoch_idx:04d}\t' + '    \t'.join(map('{:.4f}'.format, epoch_eval))
             )
 
         # if val_auc > best_val_auc:
