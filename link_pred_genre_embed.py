@@ -109,16 +109,20 @@ def load_genre_node(datapath) -> Data:
 
 
 class Net(torch.nn.Module):
-    def __init__(self, num_nodes):
+    def __init__(self, num_nodes, dropout):
         super().__init__()
-        self.num_nodes = num_nodes
 
         emb_dim = 16
         out_channels = 16
 
+        self.num_nodes = num_nodes
+        self.dropout = dropout
+
         self.embed = torch.nn.Embedding(num_embeddings=num_nodes, embedding_dim=emb_dim)
-        self.conv1 = GCNConv(emb_dim, 16)
-        self.conv2 = GCNConv(16, out_channels)
+        self.convs = [
+            GCNConv(emb_dim, 16).to(device),
+            GCNConv(16, out_channels).to(device),
+        ]
 
         # Treat this as regression, ie: produce 1 value.
         self.fc1 = torch.nn.Linear(out_channels * 2, 1)
@@ -126,8 +130,14 @@ class Net(torch.nn.Module):
     def encode(self, x, edge_index):
         x = self.embed(x)
         x = x.squeeze()
-        x = self.conv1(x, edge_index).relu()
-        return self.conv2(x, edge_index)
+
+        for conv in self.convs:
+            x = conv(x, edge_index)
+            emb = x
+            x = F.relu(x)
+            x = F.dropout(x, p=self.dropout, training=self.training)
+        
+        return emb
 
     def decode(self, z, edge_label_index):
         out = torch.cat((z[edge_label_index[0]], z[edge_label_index[1]]), axis=-1)
@@ -230,21 +240,22 @@ def main():
         val_ratio=0.1,
     )
 
-    edge_stats(dataset, 'dataset')
-    edge_stats(train_data, 'train_data')
-    edge_stats(val_data, 'val_data')
-    edge_stats(test_data, 'test_data')
-    print('\n')
+    # edge_stats(dataset, 'dataset')
+    # edge_stats(train_data, 'train_data')
+    # edge_stats(val_data, 'val_data')
+    # edge_stats(test_data, 'test_data')
+    # print('\n')
 
     ########### params #############
 
-    n_epoch = 7_000
+    n_epoch = 20_000
     learn_rate = 0.0005
+    dropout = 0.2
     use_loader = False
 
     ################################
 
-    model = Net(num_nodes=dataset.num_nodes)
+    model = Net(num_nodes=dataset.num_nodes, dropout=dropout)
     model = model.to(device)
     # train_data = train_data.to(device)
     optimizer = torch.optim.Adam(params=model.parameters(), lr=learn_rate)
@@ -269,7 +280,8 @@ def main():
         # num_workers=12,
     )
 
-    # best_val_auc = final_test_auc = 0
+    best_val = np.nan
+
     print(f'idx\tTrain_Err\tValid_Err\tTest_Err')
     for epoch_idx in range(1, n_epoch + 1):
         if use_loader:
@@ -286,9 +298,10 @@ def main():
                 f'{epoch_idx:04d}\t' + '    \t'.join(map('{:.4f}'.format, epoch_eval))
             )
 
-        # if val_auc > best_val_auc:
-        #     best_val = val_auc
-        #     final_test_auc = test_auc
+        _, val, _ = epoch_eval
+        if val - best_val > 1.0:
+            break
+        best_val = min(best_val, val)
 
 
 if __name__ == '__main__':
