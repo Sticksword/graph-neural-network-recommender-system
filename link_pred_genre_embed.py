@@ -57,7 +57,7 @@ def load_data(datapath) -> Data:
     edge_label = torch.tensor(ratings['rating'].values.reshape(-1, 1), dtype=torch.long)
 
     data = Data(x=x, edge_index=edge_index, edge_label=edge_label)
-    # import ipdb; ipdb.set_trace()
+    data.rating_index = torch.arange(len(ratings))
     return data
 
 
@@ -168,7 +168,7 @@ def evaluate(model, train, val, test) -> float:
     for data in (train, val, test):
         data = data.to(device)
         z = model.encode(data.x, data.edge_index)
-        out = model.decode(z, data.edge_label_index)
+        out = model.decode(z, data.edge_index)
         loss = F.mse_loss(out, data.edge_label.type(torch.float))
         res.append(loss)
     return res
@@ -177,7 +177,36 @@ def evaluate(model, train, val, test) -> float:
 def edge_stats(data, type_=''):
     labels = data.edge_label.squeeze().numpy()
     label, count = np.unique(labels, return_counts=True)
-    print(type_, dict(zip(label, (count/len(labels)).round(3))))
+    print(type_, '\t', len(labels), dict(zip(label, (count/len(labels)).round(3))))
+
+
+def split(data, test_ratio, val_ratio):
+    rating_index = data.rating_index
+    data = data.clone()
+    del data['rating_index']
+
+    N = len(rating_index)
+    shuffle = rating_index[torch.randperm(N)]
+    
+    test_split = int(test_ratio * N)
+    val_split = int((test_ratio + val_ratio)* N)
+    test_idx = shuffle[: test_split]
+    val_idx = shuffle[test_split: val_split]
+    train_idx = shuffle[val_split: ]
+
+    test_data = data.clone()
+    test_data.edge_index = data.edge_index[:, test_idx]
+    test_data.edge_label = data.edge_label[test_idx]
+    
+    val_data = data.clone()
+    val_data.edge_index = data.edge_index[:, val_idx]
+    val_data.edge_label = data.edge_label[val_idx]
+    
+    train_data = data.clone()
+    train_data.edge_index = data.edge_index[:, train_idx]
+    train_data.edge_label = data.edge_label[train_idx]
+    
+    return train_data, val_data, test_data
 
 
 def main():
@@ -189,22 +218,28 @@ def main():
     print(dataset, '\n')
 
     # dataset = T.NormalizeFeatures()(dataset)
-    train_data, val_data, test_data = T.RandomLinkSplit(
-        # num_val=0.1,
-        # num_test=0.2,
-        is_undirected=False,
-        add_negative_train_samples=False,
-    )(dataset)
+    # train_data, val_data, test_data = T.RandomLinkSplit(
+    #     # num_val=0.1,
+    #     # num_test=0.2,
+    #     is_undirected=False,
+    #     add_negative_train_samples=False,
+    # )(dataset)
+
+    train_data, val_data, test_data = split(
+        dataset,
+        test_ratio=0.2,
+        val_ratio=0.1,
+    )
 
     edge_stats(dataset, 'dataset')
     edge_stats(train_data, 'train_data')
     edge_stats(val_data, 'val_data')
     edge_stats(test_data, 'test_data')
-    import ipdb; ipdb.set_trace()
+    print('\n')
 
     ########### params #############
 
-    n_epoch = 2000
+    n_epoch = 10_000
     learn_rate = 0.0005
     use_loader = False
 
