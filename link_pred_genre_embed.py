@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import torch_geometric
 import torch_geometric.transforms as T
@@ -108,7 +109,7 @@ def load_genre_node(datapath) -> Data:
     return data
 
 
-class Net(torch.nn.Module):
+class Net(nn.Module):
     def __init__(self, num_nodes, dropout):
         super().__init__()
 
@@ -118,14 +119,19 @@ class Net(torch.nn.Module):
         self.num_nodes = num_nodes
         self.dropout = dropout
 
-        self.embed = torch.nn.Embedding(num_embeddings=num_nodes, embedding_dim=emb_dim)
+        self.embed = nn.Embedding(num_embeddings=num_nodes, embedding_dim=emb_dim)
         self.convs = [
             GCNConv(emb_dim, 16).to(device),
             GCNConv(16, out_channels).to(device),
         ]
 
-        # Treat this as regression, ie: produce 1 value.
-        self.fc1 = torch.nn.Linear(out_channels * 2, 1)
+        # self.fc1 = nn.Linear(out_channels * 2, 1)
+        self.linears = nn.Sequential(
+            nn.Linear(out_channels * 2, 16),
+            nn.Dropout(0.3),
+            # Treat this as regression, ie: produce 1 value.
+            nn.Linear(16, 1),
+        )
 
     def encode(self, x, edge_index):
         x = self.embed(x)
@@ -141,7 +147,7 @@ class Net(torch.nn.Module):
 
     def decode(self, z, edge_label_index):
         out = torch.cat((z[edge_label_index[0]], z[edge_label_index[1]]), axis=-1)
-        return self.fc1(out)
+        return self.linears(out)
 
 
 def train(model, optimizer, train_data) -> float:
@@ -250,7 +256,7 @@ def main():
 
     n_epoch = 20_000
     learn_rate = 0.0005
-    dropout = 0.2
+    dropout = 0.1
     use_loader = False
 
     ################################
@@ -280,7 +286,7 @@ def main():
         # num_workers=12,
     )
 
-    best_val = np.nan
+    best = np.nan
 
     print(f'idx\tTrain_Err\tValid_Err\tTest_Err')
     for epoch_idx in range(1, n_epoch + 1):
@@ -298,10 +304,12 @@ def main():
                 f'{epoch_idx:04d}\t' + '    \t'.join(map('{:.4f}'.format, epoch_eval))
             )
 
-        _, val, _ = epoch_eval
-        if val - best_val > 1.0:
+        _, val, test = epoch_eval
+        if test - best > 0.2:
             break
-        best_val = min(best_val, val)
+        best = min(best, test)
+
+    print(f'Best Test_Err: {best}')
 
 
 if __name__ == '__main__':
