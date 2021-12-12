@@ -1,4 +1,5 @@
 # {'n_epoch': 20000, 'learn_rate': 0.0005, 'hidden_dim': 16, 'dropout': 0.1, 'use_loader': True, 'walk_length': 20, 'num_steps': 20}
+# Best Test_Err: 0.921640157699585
 idx	Train_Err	Valid_Err	Test_Err	Num_Node
 0500	3.1011    	2.1301    	1.5733    	4911.0000
 1000	2.1685    	2.2244    	1.1322    	4908.0000
@@ -40,5 +41,3 @@ idx	Train_Err	Valid_Err	Test_Err	Num_Node
 19000	0.8707    	2.0714    	1.2651    	4855.0000
 19500	0.8727    	2.0330    	1.2415    	4906.0000
 20000	0.8672    	1.9397    	1.1827    	4892.0000
-
-Best Test_Err: 0.921640157699585

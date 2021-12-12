@@ -137,7 +137,7 @@ class Net(nn.Module):
         # self.fc1 = nn.Linear(out_channels * 2, 1)
         self.linears = nn.Sequential(
             nn.Linear(out_channels * 2, 16),
-            nn.Dropout(self.dropout),
+            nn.Dropout(0.2),
             # Treat this as regression, ie: produce 1 value.
             nn.Linear(16, 1),
         )
@@ -239,7 +239,7 @@ def main():
     datapath = 'ml-latest-small'
     # datapath = 'ml-25m'
 
-    dataset = load_data(datapath)
+    # dataset = load_data(datapath)
     dataset = load_genre_node(datapath)
     print(dataset, '\n')
 
@@ -269,9 +269,10 @@ def main():
         n_epoch = 20_000,
         learn_rate = 0.0005,
         hidden_dim = 16,
-        dropout = 0.3,
+        dropout = 0.2,
 
-        use_loader = False,
+        use_loader = True,
+        walk_batch=10_000,
         walk_length=10,
         num_steps=5,
     )
@@ -297,7 +298,7 @@ def main():
 
     train_loader = GraphSAINTRandomWalkSampler(
         train_data,
-        batch_size=5_000,
+        batch_size=walk_batch,
         walk_length=walk_length,
         num_steps=num_steps,
         # sample_coverage=100,
@@ -305,7 +306,7 @@ def main():
         # num_workers=12,
     )
 
-    best = 1_000
+    best = np.inf
 
     print(f'idx\tTrain_Err\tValid_Err\tTest_Err\tNum_Node')
     for epoch_idx in range(1, n_epoch + 1):
