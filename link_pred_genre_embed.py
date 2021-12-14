@@ -208,10 +208,10 @@ def test(model, data) -> float:
 
 
 @torch.no_grad()
-def evaluate(model, train, val, test) -> List[float]:
+def evaluate(model, val, test) -> List[float]:
     model.eval()
     res = []
-    for data in (train, val, test):
+    for data in (val, test):
         data = data.to(device)
         z = model.encode(data)
         out = model.decode(z, data.edge_index)
@@ -282,7 +282,6 @@ def main():
 
     # dataset = load_data(datapath)
     dataset = load_genre_node(datapath)
-    # print(dataset, '\n')
 
     # dataset = T.NormalizeFeatures()(dataset)
     # train_data, val_data, test_data = T.RandomLinkSplit(
@@ -296,7 +295,7 @@ def main():
     ########### params #############
 
     params = dict(
-        n_epoch = 20_000,
+        n_epoch = 10_000,
         learn_rate = 0.0005,
         hidden_dim = 16,
         dropout = 0.2,
@@ -306,7 +305,7 @@ def main():
         walk_length=10,
         num_steps=5,
 
-        residual_prob=0.2,
+        residual_prob=0.1,
     )
 
     ################################
@@ -315,6 +314,7 @@ def main():
 
     if params['residual_prob'] > 0:
         dataset = add_user_residual(datapath, dataset, params['residual_prob'])
+    # print(dataset, '\n')
 
     train_data, val_data, test_data = split(
         dataset,
@@ -368,18 +368,18 @@ def main():
             data = train_data.to(device)
 
         train_loss = train(model, optimizer, data)
-        epoch_eval = evaluate(model, train_data, val_data, test_data)
+        epoch_eval = evaluate(model, val_data, test_data)
 
         if epoch_idx % 500 == 0:
             # print(data)
             print(
                 f'{epoch_idx:04d}\t' + '    \t'.join(map(
-                    '{:.4f}'.format, epoch_eval + [len(data.x)])
+                    '{:.4f}'.format, [train_loss] + epoch_eval + [len(data.x)])
                     )
             )
 
         # Early stopping
-        _, val, test = epoch_eval
+        val, test = epoch_eval
         # if epoch_idx > 500 and test/best > 1.5:
         #     break
         best = min(best, test)
