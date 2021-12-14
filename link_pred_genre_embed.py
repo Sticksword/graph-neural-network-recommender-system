@@ -61,7 +61,7 @@ def load_data(datapath) -> Data:
 
     data = Data(x=x, edge_index=edge_index, edge_label=edge_label)
     data.rating_index = torch.arange(len(ratings))
-    data.user_mapping = user_mapping
+    # data.user_mapping = user_mapping
     return data
 
 
@@ -109,12 +109,12 @@ def load_genre_node(datapath) -> Data:
 
     data = Data(x=x, edge_index=edge_index, edge_label=edge_label)
     data.rating_index = torch.arange(len(ratings))
-    data.user_mapping = user_mapping
+    # data.user_mapping = user_mapping
     return data
 
 
 class Net(nn.Module):
-    def __init__(self, num_nodes, hidden_dim, dropout, residual_prob):
+    def __init__(self, num_nodes, hidden_dim, dropout):
         super().__init__()
 
         emb_dim = hidden_dim
@@ -123,7 +123,6 @@ class Net(nn.Module):
         self.num_nodes = num_nodes
         self.hidden_dim = hidden_dim
         self.dropout = dropout
-        self.residual_prob = residual_prob
 
         self.embed = nn.Embedding(num_embeddings=num_nodes, embedding_dim=emb_dim)
 
@@ -145,24 +144,24 @@ class Net(nn.Module):
             nn.Linear(16, 1),
         )
 
-    def build_residual(self, mapping: Dict[int, int], edge_index, edge_label):
-        N = len(mapping)
-        prob = int(self.residual_prob * N)
+    # def build_residual(self, mapping: Dict[int, int], edge_index, edge_label):
+    #     N = len(mapping)
+    #     prob = int(self.residual_prob * N)
         
-        src, dst = torch.randperm(N, device=device), torch.randperm(N, device=device)
-        sel = src != dst
-        e_index = torch.stack((src[sel][: prob], dst[sel][: prob]), dim=0)
+    #     src, dst = torch.randperm(N, device=device), torch.randperm(N, device=device)
+    #     sel = src != dst
+    #     e_index = torch.stack((src[sel][: prob], dst[sel][: prob]), dim=0)
         
-        return (
-            torch.cat((edge_index, e_index), dim=1),
-            torch.cat((edge_label, torch.ones(prob, device=device).reshape(-1, 1)), dim=0)
-        )
+    #     return (
+    #         torch.cat((edge_index, e_index), dim=1),
+    #         torch.cat((edge_label, torch.ones(prob, device=device).reshape(-1, 1)), dim=0)
+    #     )
 
     def encode(self, data):
-        if self.residual_prob > 0:
-            data.edge_index, data.edge_label = self.build_residual(
-                data.user_mapping, data.edge_index, data.edge_label,
-            )
+        # if self.residual_prob > 0:
+        #     data.edge_index, data.edge_label = self.build_residual(
+        #         data.user_mapping, data.edge_index, data.edge_label,
+        #     )
             
         x, edge_index = data.x, data.edge_index
         x = self.embed(x)
@@ -257,6 +256,26 @@ def split(data, test_ratio, val_ratio):
     return train_data, val_data, test_data
 
 
+def add_user_residual(datapath, data, prob):
+    ratings = pd.read_csv(f'./{datapath}/ratings.csv')
+    user_mapping = {
+        id_: idx for idx, id_ in enumerate(ratings['userId'].unique())
+    }
+
+    N = len(user_mapping)
+    src, dst = torch.randperm(N), torch.randperm(N)
+    sel = (src != dst) & (torch.rand(N) < prob)
+    r_index = torch.stack((src[sel], dst[sel]), dim=0)
+    r_label = torch.ones(len(r_index[0])).reshape(-1, 1)
+
+    res = data.clone()
+    
+    res.edge_index = torch.cat((data.edge_index, r_index), dim=1)
+    res.edge_label = torch.cat((data.edge_label, r_label), dim=0)
+    
+    return res
+    
+    
 def main():
     datapath = 'ml-latest-small'
     # datapath = 'ml-25m'
@@ -273,18 +292,7 @@ def main():
     #     add_negative_train_samples=False,
     # )(dataset)
 
-    train_data, val_data, test_data = split(
-        dataset,
-        test_ratio=0.2,
-        val_ratio=0.1,
-    )
-
-    # edge_stats(dataset, 'dataset')
-    # edge_stats(train_data, 'train_data')
-    # edge_stats(val_data, 'val_data')
-    # edge_stats(test_data, 'test_data')
-    # print('\n')
-
+    
     ########### params #############
 
     params = dict(
@@ -305,9 +313,26 @@ def main():
     print('#', params)
     globals().update(params)
 
+    if params['residual_prob'] > 0:
+        dataset = add_user_residual(datapath, dataset, params['residual_prob'])
+
+    train_data, val_data, test_data = split(
+        dataset,
+        test_ratio=0.2,
+        val_ratio=0.1,
+    )
+
+    # edge_stats(dataset, 'dataset')
+    # edge_stats(train_data, 'train_data')
+    # edge_stats(val_data, 'val_data')
+    # edge_stats(test_data, 'test_data')
+    # print('\n')
+
+
     model = Net(
-        num_nodes=dataset.num_nodes, hidden_dim=hidden_dim, dropout=dropout,
-        residual_prob=residual_prob,
+        num_nodes=dataset.num_nodes, 
+        hidden_dim=hidden_dim, 
+        dropout=dropout,
     )
     model = model.to(device)
     # train_data = train_data.to(device)
