@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Dict
 
 import pandas as pd
 import numpy as np
@@ -61,6 +61,7 @@ def load_data(datapath) -> Data:
 
     data = Data(x=x, edge_index=edge_index, edge_label=edge_label)
     data.rating_index = torch.arange(len(ratings))
+    data.user_mapping = user_mapping
     return data
 
 
@@ -108,11 +109,12 @@ def load_genre_node(datapath) -> Data:
 
     data = Data(x=x, edge_index=edge_index, edge_label=edge_label)
     data.rating_index = torch.arange(len(ratings))
+    data.user_mapping = user_mapping
     return data
 
 
 class Net(nn.Module):
-    def __init__(self, num_nodes, hidden_dim, dropout):
+    def __init__(self, num_nodes, hidden_dim, dropout, residual_prob):
         super().__init__()
 
         emb_dim = hidden_dim
@@ -121,6 +123,7 @@ class Net(nn.Module):
         self.num_nodes = num_nodes
         self.hidden_dim = hidden_dim
         self.dropout = dropout
+        self.residual_prob = residual_prob
 
         self.embed = nn.Embedding(num_embeddings=num_nodes, embedding_dim=emb_dim)
 
@@ -142,7 +145,26 @@ class Net(nn.Module):
             nn.Linear(16, 1),
         )
 
-    def encode(self, x, edge_index):
+    def build_residual(self, mapping: Dict[int, int], edge_index, edge_label):
+        N = len(mapping)
+        prob = int(self.residual_prob * N)
+        
+        src, dst = torch.randperm(N, device=device), torch.randperm(N, device=device)
+        sel = src != dst
+        e_index = torch.stack((src[sel][: prob], dst[sel][: prob]), dim=0)
+        
+        return (
+            torch.cat((edge_index, e_index), dim=1),
+            torch.cat((edge_label, torch.ones(prob, device=device).reshape(-1, 1)), dim=0)
+        )
+
+    def encode(self, data):
+        if self.residual_prob > 0:
+            data.edge_index, data.edge_label = self.build_residual(
+                data.user_mapping, data.edge_index, data.edge_label,
+            )
+            
+        x, edge_index = data.x, data.edge_index
         x = self.embed(x)
         x = x.squeeze()
 
@@ -165,7 +187,7 @@ def train(model, optimizer, train_data) -> float:
     model.train()
 
     optimizer.zero_grad()
-    z = model.encode(train_data.x, train_data.edge_index)
+    z = model.encode(train_data)
     out = model.decode(z, train_data.edge_index)
 
     loss = F.mse_loss(out, train_data.edge_label.type(torch.float))
@@ -179,7 +201,7 @@ def train(model, optimizer, train_data) -> float:
 def test(model, data) -> float:
     model.eval()
     data = data.to(device)
-    z = model.encode(data.x, data.edge_index)
+    z = model.encode(data)
     out = model.decode(z, data.edge_index)
     # auc = roc_auc_score(data.edge_label.cpu().numpy(), out.cpu().numpy())
     loss = F.mse_loss(out, data.edge_label.type(torch.float))
@@ -192,7 +214,7 @@ def evaluate(model, train, val, test) -> List[float]:
     res = []
     for data in (train, val, test):
         data = data.to(device)
-        z = model.encode(data.x, data.edge_index)
+        z = model.encode(data)
         out = model.decode(z, data.edge_index)
         loss = F.mse_loss(out, data.edge_label.type(torch.float))
         res.append(loss)
@@ -241,7 +263,7 @@ def main():
 
     # dataset = load_data(datapath)
     dataset = load_genre_node(datapath)
-    print(dataset, '\n')
+    # print(dataset, '\n')
 
     # dataset = T.NormalizeFeatures()(dataset)
     # train_data, val_data, test_data = T.RandomLinkSplit(
@@ -271,17 +293,22 @@ def main():
         hidden_dim = 16,
         dropout = 0.2,
 
-        use_loader = True,
+        use_loader = False,
         walk_batch=10_000,
         walk_length=10,
         num_steps=5,
+
+        residual_prob=0.2,
     )
 
     ################################
     print('#', params)
     globals().update(params)
 
-    model = Net(num_nodes=dataset.num_nodes, hidden_dim=hidden_dim, dropout=dropout)
+    model = Net(
+        num_nodes=dataset.num_nodes, hidden_dim=hidden_dim, dropout=dropout,
+        residual_prob=residual_prob,
+    )
     model = model.to(device)
     # train_data = train_data.to(device)
     optimizer = torch.optim.Adam(params=model.parameters(), lr=learn_rate)
